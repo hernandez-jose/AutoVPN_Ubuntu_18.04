@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# install vpn software
+sudo apt-get update -y
+sudo apt-get install openvpn easy-rsa -y
+sudo apt-get install expect -y
+
+# change dir
+make-cadir ~/openvpn-ca
+cd ~/openvpn-ca
+
+# create a sybolic link b/c file is pointing in wrong direction
+sudo ln -s ~/openvpn-ca/openssl-1.0.0.cnf ~/openvpn-ca/openssl.cnf
+
+# modify vars files
+sed -i '72c\export KEY_NAME="server"' ~/openvpn-ca/vars
+
+# build certificate authority
+cd ~/openvpn-ca
+source vars
+./clean-all
+
+cp ~/expect_build-ca ~/openvpn-ca/expect_build-ca
+cp ~/expect_build-key-server ~/openvpn-ca/expect_build-key-server
+#expect script to call ./build-ca
+./expect_build-ca
+#expect script to call ./_build-key-server server
+./expect_build-key-server
+
+./build-dh
+openvpn --genkey --secret keys/ta.key
+
+# Generate a Client Certificate and Key Pair
+cd ~/openvpn-ca
+source vars
+./build-key client1
+
+#Configure the OpenVPN Service
+cd ~/openvpn-ca/keys
+sudo cp ca.crt server.crt server.key ta.key dh2048.pem /etc/openvpn
+
+gunzip -c /usr/share/doc/openvpn/examples/sample-config-files/server.conf.gz | sudo tee /etc/openvpn/server.conf
+
+#Adjust the OpenVPN Configuration
+sudo sed -i '252c\cipher AES-128-CBC' /etc/openvpn/server.conf
+sudo sed -i '252a\auth SHA256' /etc/openvpn/server.conf
+sudo sed -i '252a\key-direction 0' /etc/openvpn/server.conf
+sudo sed -i '276c\user nobody' /etc/openvpn/server.conf
+sudo sed -i '277c\group nogroup' /etc/openvpn/server.conf
+sudo sed -i '192c\push "redirect-gateway def1 bypass-dhcp"' /etc/openvpn/server.conf
+sudo sed -i '200c\push "dhcp-option DNS 208.67.222.222"' /etc/openvpn/server.conf
+sudo sed -i '201c\push "dhcp-option DNS 208.67.220.220"' /etc/openvpn/server.conf
+
+#Adjust the Server Networking Configuration
+sudo sed -i '28c\net.ipv4.ip_forward=1' /etc/sysctl.conf
+
+sudo sysctl -p
+
+#UFW Rules to Masquerade Client Connections
+sudo sed -i '11i\COMMIT' /etc/ufw/before.rules
+sudo sed -i '11i\-A POSTROUTING -s 10.8.0.0/8 -o eth0 -j MASQUERADE' /etc/ufw/before.rules
+sudo sed -i '11i\:POSTROUTING ACCEPT [0:0]' /etc/ufw/before.rules
+sudo sed -i '11i\*nat' /etc/ufw/before.rules
+
+sudo sed -i '19c\DEFAULT_FORWARD_POLICY="ACCEPT"' /etc/default/ufw
+
+#Open the OpenVPN Port and Enable the Changes
+sudo ufw allow 1194/udp
+sudo ufw allow OpenSSH
+
+sudo ufw disable
+sudo ufw enable
+
+#Start and Enable the OpenVPN Service
+sudo systemctl start openvpn@server
+sudo systemctl enable openvpn@server
+
+#Create Client Configuration Infrastructure
+mkdir -p ~/client-configs/files
+chmod 700 ~/client-configs/files
+cp /usr/share/doc/openvpn/examples/sample-config-files/client.conf ~/client-configs/base.conf
+
+# get public IP
+PUBLIC_IP="$(curl ifconfig.me)"
+
+sed -i '42c\remote '"$PUBLIC_IP"' 1194' ~/client-configs/base.conf
+sed -i '61c\user nobody' ~/client-configs/base.conf
+sed -i '62c\group nogroup' ~/client-configs/base.conf
+sed -i '88c\#ca ca.crt' ~/client-configs/base.conf
+sed -i '89c\#cert client.crt' ~/client-configs/base.conf
+sed -i '90c\#key client.key' ~/client-configs/base.conf
+sed -i '116c\cipher AES-128-CBC' ~/client-configs/base.conf
+sed -i '116a\auth SHA256' ~/client-configs/base.conf
+sed -i '116a\key-direction 1' ~/client-configs/base.conf
+
+cp ~/make_config.sh ~/client-configs/make_config.sh
+
+chmod 700 ~/client-configs/make_config.sh
+
+cd ~/client-configs
+./make_config.sh client1
+
+echo "Check dir: ~/client-configs/files"

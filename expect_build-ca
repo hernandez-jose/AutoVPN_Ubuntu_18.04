@@ -1,0 +1,19 @@
+#!/usr/bin/expect
+spawn ./build-ca
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect "*:"
+send "\r"
+expect EOF
